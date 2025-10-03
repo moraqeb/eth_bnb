@@ -54,70 +54,81 @@ class CryptoSweeperMonitor {
     console.log(`[${type.toUpperCase()}] ${message}`);
   }
   
-  async sweepNetwork(providerUrl, networkName, chainId, walletObj, walletIndex) {
+  async sweepNetworkWebSocket(providerUrl, networkName, chainId, walletObj, walletIndex) {
     const ignoredBalances = new Map();
     let isSending = false;
     
-    try {
-      this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName}...`, 'info');
-      
-      const provider = new ethers.WebSocketProvider(providerUrl);
-      provider.on('error', () => {});
-      
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      
-      if (provider._websocket) {
-        provider._websocket.removeAllListeners('error');
-        provider._websocket.on('error', () => {});
-      }
-      
-      const wallet = walletObj.wallet.connect(provider);
-      
-      this.addNotification(`✅ [محفظة ${walletIndex}] ${networkName} متصل`, 'success');
-      
-      const checkBalance = async () => {
-        try {
-          const balance = await provider.getBalance(walletObj.address);
-          return balance;
-        } catch (error) {
-          return 0n;
-        }
-      };
-      
-      const initialBalance = await checkBalance();
-      if (initialBalance > 0n) {
-        const balanceKey = initialBalance.toString();
-        if (!ignoredBalances.has(balanceKey) && !isSending) {
-          this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد: ${ethers.formatEther(initialBalance)}`, 'info');
-          await this.forwardFunds(provider, wallet, initialBalance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
-        }
-      }
-      
-      provider.on('block', async (blockNumber) => {
-        try {
-          const balance = await checkBalance();
-          
-          if (balance > 0n) {
-            const balanceKey = balance.toString();
-            
-            if (ignoredBalances.has(balanceKey) || isSending) {
-              return;
-            }
-            
-            this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد جديد! ${ethers.formatEther(balance)}`, 'success');
-            
-            await this.forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
-          }
-        } catch (error) {
-          console.error(`❌ خطأ في البلوك ${blockNumber}:`, error.message);
-        }
-      });
-      
-      walletObj.networks.push({ provider, networkName, chainId });
-      
-    } catch (error) {
-      this.addNotification(`❌ [محفظة ${walletIndex}] فشل ${networkName}: ${error.message}`, 'error');
+    this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName} (WebSocket)...`, 'info');
+    
+    const provider = new ethers.WebSocketProvider(providerUrl);
+    provider.websocket.removeAllListeners('error');
+    provider.websocket.on('error', () => {});
+    
+    const wallet = walletObj.wallet.connect(provider);
+    
+    this.addNotification(`✅ [محفظة ${walletIndex}] ${networkName} متصل`, 'success');
+    
+    const initialBalance = await provider.getBalance(walletObj.address);
+    if (initialBalance > 0n && !isSending) {
+      this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد: ${ethers.formatEther(initialBalance)}`, 'info');
+      await this.forwardFunds(provider, wallet, initialBalance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
     }
+    
+    provider.on('block', async (blockNumber) => {
+      const balance = await provider.getBalance(walletObj.address);
+      
+      if (balance > 0n) {
+        const balanceKey = balance.toString();
+        
+        if (ignoredBalances.has(balanceKey) || isSending) {
+          return;
+        }
+        
+        this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد جديد! ${ethers.formatEther(balance)}`, 'success');
+        
+        await this.forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
+      }
+    });
+    
+    walletObj.networks.push({ provider, networkName, chainId });
+  }
+
+  async sweepNetworkHTTPS(providerUrl, networkName, chainId, walletObj, walletIndex) {
+    const ignoredBalances = new Map();
+    let isSending = false;
+    
+    this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName} (HTTPS - فحص كل 5 ثواني)...`, 'info');
+    
+    const provider = new ethers.JsonRpcProvider(providerUrl);
+    const wallet = walletObj.wallet.connect(provider);
+    
+    this.addNotification(`✅ [محفظة ${walletIndex}] ${networkName} متصل`, 'success');
+    
+    const checkBalance = async () => {
+      try {
+        const balance = await provider.getBalance(walletObj.address);
+        
+        if (balance > 0n) {
+          const balanceKey = balance.toString();
+          
+          if (ignoredBalances.has(balanceKey) || isSending) {
+            return;
+          }
+          
+          this.addNotification(`💰 [محفظة ${walletIndex}][${networkName}] رصيد: ${ethers.formatEther(balance)}`, 'info');
+          
+          await this.forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, () => isSending, (val) => isSending = val, walletIndex);
+        }
+      } catch (error) {
+        console.error(`خطأ في فحص الرصيد [${networkName}]:`, error.message);
+      }
+    };
+    
+    await checkBalance();
+    
+    const intervalId = setInterval(checkBalance, 5000);
+    
+    walletObj.networks.push({ provider, networkName, chainId, intervalId });
   }
   
   async forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, getSending, setSending, walletIndex) {
@@ -217,8 +228,8 @@ class CryptoSweeperMonitor {
     this.addNotification(`🚀 بدء مراقبة المحفظة ${walletObj.index}`, 'info');
     
     await Promise.all([
-      this.sweepNetwork(rpcUrls.eth, 'Ethereum', 1, walletObj, walletObj.index),
-      this.sweepNetwork(rpcUrls.bsc, 'BSC', 56, walletObj, walletObj.index)
+      this.sweepNetworkHTTPS(rpcUrls.eth, 'Ethereum', 1, walletObj, walletObj.index),
+      this.sweepNetworkWebSocket(rpcUrls.bsc, 'BSC', 56, walletObj, walletObj.index)
     ]);
   }
   
@@ -226,6 +237,9 @@ class CryptoSweeperMonitor {
     for (const walletObj of this.wallets) {
       for (const network of walletObj.networks) {
         try {
+          if (network.intervalId) {
+            clearInterval(network.intervalId);
+          }
           if (network.provider && network.provider.destroy) {
             network.provider.destroy();
           }
@@ -358,6 +372,7 @@ app.get('/', (req, res) => {
             border-right: 3px solid #667eea;
             word-wrap: break-word;
             overflow-wrap: break-word;
+            word-break: break-all;
             max-width: 100%;
         }
         .notification.success { background: #d4edda; border-color: #28a745; }
