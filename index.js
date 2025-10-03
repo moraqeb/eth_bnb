@@ -1,6 +1,14 @@
 const { ethers } = require('ethers');
 const express = require('express');
 
+process.on('uncaughtException', (error) => {
+  console.error('❌ خطأ غير معالج:', error.message);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Promise مرفوض:', reason);
+});
+
 const DESTINATION_ADDRESS = process.env.DESTINATION_ADDRESS || '0x9e47977653b80aA0D3a965Fb66369e2d0bAfB243';
 
 const RPC_URLS = {
@@ -54,10 +62,14 @@ class CryptoSweeperMonitor {
       this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName}...`, 'info');
       
       const provider = new ethers.WebSocketProvider(providerUrl);
+      provider.on('error', () => {});
       
-      provider.on('error', (error) => {
-        this.addNotification(`❌ [محفظة ${walletIndex}] خطأ في ${networkName}: ${error.message}`, 'error');
-      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      
+      if (provider._websocket) {
+        provider._websocket.removeAllListeners('error');
+        provider._websocket.on('error', () => {});
+      }
       
       const wallet = walletObj.wallet.connect(provider);
       
