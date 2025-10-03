@@ -54,6 +54,11 @@ class CryptoSweeperMonitor {
       this.addNotification(`🔗 [محفظة ${walletIndex}] الاتصال بـ ${networkName}...`, 'info');
       
       const provider = new ethers.WebSocketProvider(providerUrl);
+      
+      provider.on('error', (error) => {
+        this.addNotification(`❌ [محفظة ${walletIndex}] خطأ في ${networkName}: ${error.message}`, 'error');
+      });
+      
       const wallet = walletObj.wallet.connect(provider);
       
       this.addNotification(`✅ [محفظة ${walletIndex}] ${networkName} متصل`, 'success');
@@ -94,10 +99,6 @@ class CryptoSweeperMonitor {
         } catch (error) {
           console.error(`❌ خطأ في البلوك ${blockNumber}:`, error.message);
         }
-      });
-      
-      provider.on('error', (error) => {
-        this.addNotification(`❌ [محفظة ${walletIndex}] خطأ في ${networkName}: ${error.message}`, 'error');
       });
       
       walletObj.networks.push({ provider, networkName, chainId });
