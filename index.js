@@ -9,7 +9,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Promise مرفوض:', reason);
 });
 
-const DESTINATION_ADDRESS = process.env.DESTINATION_ADDRESS || '0x9e47977653b80aA0D3a965Fb66369e2d0bAfB243';
+const DESTINATION_ADDRESS = process.env.DESTINATION_ADDRESS || '0xde402d9020cd1199fec486db70320f8f98ec5fec';
 
 const RPC_URLS = {
   wallet1: {
