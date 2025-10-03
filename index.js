@@ -141,6 +141,13 @@ class CryptoSweeperMonitor {
   
   async forwardFunds(provider, wallet, balance, networkName, chainId, ignoredBalances, getSending, setSending, walletIndex) {
     try {
+      const minBalance = ethers.parseEther('0.00004');
+      
+      if (balance < minBalance) {
+        ignoredBalances.set(balance.toString(), true);
+        return false;
+      }
+      
       const startTime = Date.now();
       
       const feeData = await provider.getFeeData();
@@ -498,7 +505,7 @@ app.get('/', (req, res) => {
                 return;
             }
             
-            const privateKeys = input.split(/[\n,\s]+/).filter(key => key.length > 0);
+            const privateKeys = input.split(/[\\n,\\s]+/).filter(key => key.length > 0);
             
             try {
                 const response = await fetch('/api/add-wallet', {
